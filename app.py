@@ -542,6 +542,7 @@ def create_pptx_structured(output_path: str, title: str, slides_data, style: str
         p_title.text = item.get("title", "内容")
         p_title.font.size = Pt(24)
         p_title.font.bold = True
+        p_title.font.name = "微软雅黑"
 
         sub_box = slide.shapes.add_textbox(Pt(36), Pt(60), Pt(620), Pt(24))
         tf_sub = sub_box.text_frame
@@ -563,7 +564,7 @@ def create_pptx_structured(output_path: str, title: str, slides_data, style: str
             p.text = bullet
             p.level = 0
             p.font.size = Pt(20 if style == "汇报" else 18)
-            p.space_after = Pt(10)
+            p.font.name = "微软雅黑"
 
     prs.save(output_path)
 
