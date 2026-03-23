@@ -391,9 +391,7 @@ def webhook():
             send_document(chat_id, file_path, "你的 PPT 文件已生成")
 
         elif file_type == "xmind":
-            file_path = build_output_filename(content, "xmind", custom_name)
-            create_xmind(content, file_path)
-            send_document(chat_id, file_path, "你的 XMind 文件已生成")
+             send_message(chat_id, "XMind 真文件生成功能正在升级中，当前请先使用 PDF / Word / Excel / PPT。")
 
         else:
             file_path = build_output_filename(content, "pdf", custom_name)
