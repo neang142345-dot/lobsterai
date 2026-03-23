@@ -13,7 +13,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "my-secret")
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-TRIGGER_WORDS = ["我需要制作", "制作", "生成文件"]
+TRIGGER_WORDS = ["PDF"]
 
 def create_pdf(text: str, output_path: str):
     pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
@@ -92,6 +92,7 @@ def webhook():
     chat = message.get("chat", {})
     chat_id = chat.get("id")
     text = message.get("text", "")
+    clean_text = text.replace("生成文件", "").strip()
 
     if not chat_id:
         return jsonify({"ok": True})
@@ -109,7 +110,7 @@ def webhook():
         timestamp = int(time.time())
         file_path = f"/tmp/generated_{timestamp}.pdf"
 
-        create_pdf(text, file_path)
+        create_pdf(clean_text, file_path)
         send_document(chat_id, file_path, "你的 PDF 已生成")
 
         return jsonify({"ok": True})
