@@ -3,8 +3,14 @@ services:
     name: lobsterai-web
     env: python
     plan: free
-    buildCommand: "pip install flask"
+    buildCommand: "pip install -r requirements.txt"
     startCommand: "python app.py"
     envVars:
       - key: PORT
         value: 10000
+      - key: BOT_TOKEN
+        sync: false
+      - key: WEBHOOK_SECRET
+        sync: false
+      - key: RENDER_EXTERNAL_URL
+        value: https://lobsterai-web.onrender.com
