@@ -10,7 +10,6 @@ from pptx.util import Pt
 import requests
 import os
 import re
-import xmind
 
 app = Flask(__name__)
 
@@ -19,7 +18,7 @@ WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "my-secret")
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 
-# ========= 通用工具 =========
+# ========= 基础工具 =========
 
 def send_message(chat_id: int, text: str):
     requests.post(
@@ -79,23 +78,6 @@ def extract_custom_filename(text: str):
     return custom_name, "\n".join(remaining_lines).strip()
 
 
-def detect_file_type(text: str) -> str:
-    t = (text or "").lower()
-
-    if "xmind" in t or "思维导图" in text:
-        return "xmind"
-    if "pptx" in t or re.search(r"\bppt\b", t) or "幻灯片" in text or "演示文稿" in text:
-        return "pptx"
-    if "xlsx" in t or "excel" in t or "表格" in text:
-        return "xlsx"
-    if "docx" in t or "word" in t or "文档" in text:
-        return "docx"
-    if "pdf" in t:
-        return "pdf"
-
-    return "pdf"
-
-
 def strip_leading_type_command(text: str) -> str:
     cleaned = normalize_text(text)
 
@@ -104,18 +86,11 @@ def strip_leading_type_command(text: str) -> str:
         "生成 word：", "生成word：", "生成 word:", "生成word:",
         "生成 excel：", "生成excel：", "生成 excel:", "生成excel:",
         "生成 ppt：", "生成ppt：", "生成 ppt:", "生成ppt:",
-        "生成 xmind：", "生成xmind：", "生成 xmind:", "生成xmind:",
-        "生成 思维导图：", "生成 思维导图:", "生成思维导图：", "生成思维导图:",
         "制作 pdf：", "制作pdf：", "制作 pdf:", "制作pdf:",
         "制作 word：", "制作word：", "制作 word:", "制作word:",
         "制作 excel：", "制作excel：", "制作 excel:", "制作excel:",
         "制作 ppt：", "制作ppt：", "制作 ppt:", "制作ppt:",
-        "制作 xmind：", "制作xmind：", "制作 xmind:", "制作xmind:",
-        "制作 思维导图：", "制作 思维导图:", "制作思维导图：", "制作思维导图:",
-        "帮我生成 pdf：", "帮我生成word：", "帮我生成 excel：", "帮我生成 ppt：",
-        "帮我生成 xmind：", "帮我制作 pdf：", "帮我制作word：", "帮我制作 excel：",
-        "帮我制作 ppt：", "帮我制作 xmind：",
-        "生成文件", "生成文档", "生成", "制作文件", "制作文档", "制作", "帮我生成", "帮我制作"
+        "帮我生成", "帮我制作", "生成文件", "生成文档", "生成", "制作文件", "制作文档", "制作"
     ]
 
     for prefix in prefixes:
@@ -142,6 +117,110 @@ def build_output_filename(content: str, ext: str, custom_name: str = None) -> st
 
     return f"/tmp/{base_name}.{ext}"
 
+
+# ========= 意图识别 =========
+
+def detect_intent_and_file_type(text: str):
+    """
+    返回:
+    {
+        "file_type": "pdf/docx/xlsx/pptx",
+        "intent": "generic/leave/salary/weekly_report/meeting_minutes/contract/presentation"
+    }
+    """
+    raw = text or ""
+    t = raw.lower()
+
+    # 明确文件类型优先
+    if "xlsx" in t or "excel" in t or "表格" in raw or "工资表" in raw or "销售表" in raw:
+        return {"file_type": "xlsx", "intent": "table"}
+
+    if "pptx" in t or re.search(r"\bppt\b", t) or "幻灯片" in raw or "演示文稿" in raw or "汇报" in raw or "路演" in raw:
+        return {"file_type": "pptx", "intent": "presentation"}
+
+    if "docx" in t or "word" in t or "请假申请" in raw or "合同" in raw or "申请书" in raw:
+        if "请假" in raw:
+            return {"file_type": "docx", "intent": "leave"}
+        if "合同" in raw:
+            return {"file_type": "docx", "intent": "contract"}
+        return {"file_type": "docx", "intent": "document"}
+
+    if "会议纪要" in raw:
+        return {"file_type": "docx", "intent": "meeting_minutes"}
+
+    if "周报" in raw or "月报" in raw or "日报" in raw:
+        return {"file_type": "docx", "intent": "weekly_report"}
+
+    if "pdf" in t:
+        return {"file_type": "pdf", "intent": "generic"}
+
+    # 默认 PDF
+    return {"file_type": "pdf", "intent": "generic"}
+
+
+# ========= 模板增强 =========
+
+def ensure_nonempty(text: str) -> str:
+    return text if text and text.strip() else "（空内容）"
+
+
+def enhance_content(intent: str, content: str) -> str:
+    """
+    对常见办公场景做轻量模板化
+    """
+    clean = ensure_nonempty(content)
+    lines = [line.strip() for line in clean.splitlines() if line.strip()]
+
+    if intent == "leave":
+        # 用户只写了简单一句，就自动补成请假申请格式
+        if len(lines) <= 3:
+            reason = clean
+            return (
+                "请假申请\n"
+                "尊敬的领导：\n"
+                f"本人因{reason}，特申请请假一天，请予批准。\n"
+                "此致\n"
+                "敬礼"
+            )
+        return clean
+
+    if intent == "meeting_minutes":
+        return (
+            "会议纪要\n"
+            f"{clean}\n\n"
+            "行动项：\n"
+            "1. 待补充\n"
+            "2. 待补充"
+        )
+
+    if intent == "weekly_report":
+        return (
+            "工作汇报\n"
+            "一、本周完成\n"
+            f"{clean}\n\n"
+            "二、存在问题\n"
+            "待补充\n\n"
+            "三、下周计划\n"
+            "待补充"
+        )
+
+    if intent == "contract":
+        if len(lines) <= 5:
+            return (
+                "合作协议\n"
+                "甲方：\n"
+                "乙方：\n"
+                "合作内容：\n"
+                f"{clean}\n"
+                "付款方式：\n"
+                "双方权责：\n"
+            )
+        return clean
+
+    return clean
+
+
+# ========= PDF =========
 
 def wrap_text_lines(text: str, c, font_name: str, font_size: int, max_width: float):
     if not text or not text.strip():
@@ -171,46 +250,6 @@ def wrap_text_lines(text: str, c, font_name: str, font_size: int, max_width: flo
 
     return wrapped if wrapped else ["（空内容）"]
 
-
-def parse_table_text(text: str):
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if not lines:
-        return [["（空内容）"]]
-
-    rows = []
-    for line in lines:
-        if "\t" in line:
-            rows.append([cell.strip() for cell in line.split("\t")])
-        elif "," in line:
-            rows.append([cell.strip() for cell in line.split(",")])
-        elif "，" in line:
-            rows.append([cell.strip() for cell in line.split("，")])
-        else:
-            rows.append([line])
-    return rows
-
-
-def parse_ppt_content(text: str):
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if not lines:
-        return "自动生成演示文稿", ["（空内容）"]
-
-    title = lines[0]
-    bullets = lines[1:] if len(lines) > 1 else ["（无补充内容）"]
-    return title, bullets
-
-
-def parse_mindmap_outline(text: str):
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if not lines:
-        return "思维导图主题", ["（空内容）"]
-
-    root = lines[0]
-    children = lines[1:] if len(lines) > 1 else ["（空内容）"]
-    return root, children
-
-
-# ========= 文件生成 =========
 
 def create_pdf(text: str, output_path: str):
     pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
@@ -250,6 +289,8 @@ def create_pdf(text: str, output_path: str):
     c.save()
 
 
+# ========= Word =========
+
 def create_docx(text: str, output_path: str):
     doc = Document()
     title = build_title(text)
@@ -263,6 +304,26 @@ def create_docx(text: str, output_path: str):
     doc.save(output_path)
 
 
+# ========= Excel =========
+
+def parse_table_text(text: str):
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return [["（空内容）"]]
+
+    rows = []
+    for line in lines:
+        if "\t" in line:
+            rows.append([cell.strip() for cell in line.split("\t")])
+        elif "," in line:
+            rows.append([cell.strip() for cell in line.split(",")])
+        elif "，" in line:
+            rows.append([cell.strip() for cell in line.split("，")])
+        else:
+            rows.append([line])
+    return rows
+
+
 def create_xlsx(text: str, output_path: str):
     wb = Workbook()
     ws = wb.active
@@ -274,6 +335,18 @@ def create_xlsx(text: str, output_path: str):
             ws.cell(row=row_idx, column=col_idx, value=value)
 
     wb.save(output_path)
+
+
+# ========= PPT =========
+
+def parse_ppt_content(text: str):
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return "自动生成演示文稿", ["（空内容）"]
+
+    title = lines[0]
+    bullets = lines[1:] if len(lines) > 1 else ["（无补充内容）"]
+    return title, bullets
 
 
 def create_pptx(text: str, output_path: str):
@@ -302,30 +375,11 @@ def create_pptx(text: str, output_path: str):
     prs.save(output_path)
 
 
-def create_xmind(text: str, output_path: str):
-    """
-    生成真正的 .xmind 文件
-    """
-    workbook = xmind.load(output_path)
-    sheet = workbook.getPrimarySheet()
-    sheet.setTitle("思维导图")
-
-    root_topic = sheet.getRootTopic()
-    root_title, children = parse_mindmap_outline(text)
-    root_topic.setTitle(root_title)
-
-    for child in children:
-        topic = root_topic.addSubTopic()
-        topic.setTitle(child)
-
-    xmind.save(workbook, path=output_path)
-
-
 # ========= 路由 =========
 
 @app.route("/")
 def home():
-    return "TG multi-file bot is running!"
+    return "TG office assistant bot is running!"
 
 
 @app.route("/health")
@@ -351,7 +405,7 @@ def webhook():
     if text == "/start":
         send_message(
             chat_id,
-            "你好，直接发送内容即可。我会自动识别并生成 PDF / Word / Excel / PPT / XMind 真文件。支持“文件名：xxx”自定义文件名。"
+            "你好，直接发送内容即可。我会自动识别并生成 PDF / Word / Excel / PPT 真文件。支持“文件名：xxx”自定义文件名。"
         )
         return jsonify({"ok": True})
 
@@ -359,43 +413,43 @@ def webhook():
         send_message(chat_id, "请直接发送正文内容，不需要输入命令。")
         return jsonify({"ok": True})
 
-    file_type = detect_file_type(text)
     custom_name, text_without_filename = extract_custom_filename(text)
-    content = strip_leading_type_command(text_without_filename)
+    cleaned = strip_leading_type_command(text_without_filename)
+    route = detect_intent_and_file_type(cleaned)
+    file_type = route["file_type"]
+    intent = route["intent"]
 
-    if not content:
+    if not cleaned:
         send_message(chat_id, "请发送你要生成成文件的文字内容。")
         return jsonify({"ok": True})
 
+    final_content = enhance_content(intent, cleaned)
     send_message(chat_id, f"已收到，正在为你生成 {file_type} 文件...")
 
     try:
         if file_type == "pdf":
-            file_path = build_output_filename(content, "pdf", custom_name)
-            create_pdf(content, file_path)
+            file_path = build_output_filename(final_content, "pdf", custom_name)
+            create_pdf(final_content, file_path)
             send_document(chat_id, file_path, "你的 PDF 已生成")
 
         elif file_type == "docx":
-            file_path = build_output_filename(content, "docx", custom_name)
-            create_docx(content, file_path)
+            file_path = build_output_filename(final_content, "docx", custom_name)
+            create_docx(final_content, file_path)
             send_document(chat_id, file_path, "你的 Word 文档已生成")
 
         elif file_type == "xlsx":
-            file_path = build_output_filename(content, "xlsx", custom_name)
-            create_xlsx(content, file_path)
+            file_path = build_output_filename(final_content, "xlsx", custom_name)
+            create_xlsx(final_content, file_path)
             send_document(chat_id, file_path, "你的 Excel 文件已生成")
 
         elif file_type == "pptx":
-            file_path = build_output_filename(content, "pptx", custom_name)
-            create_pptx(content, file_path)
+            file_path = build_output_filename(final_content, "pptx", custom_name)
+            create_pptx(final_content, file_path)
             send_document(chat_id, file_path, "你的 PPT 文件已生成")
 
-        elif file_type == "xmind":
-             send_message(chat_id, "XMind 真文件生成功能正在升级中，当前请先使用 PDF / Word / Excel / PPT。")
-
         else:
-            file_path = build_output_filename(content, "pdf", custom_name)
-            create_pdf(content, file_path)
+            file_path = build_output_filename(final_content, "pdf", custom_name)
+            create_pdf(final_content, file_path)
             send_document(chat_id, file_path, "你的 PDF 已生成")
 
     except Exception as e:
