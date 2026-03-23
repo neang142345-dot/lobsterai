@@ -5,7 +5,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from docx import Document
 from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment, PatternFill
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from pptx import Presentation
 from pptx.util import Pt
 import requests
@@ -126,7 +126,7 @@ def build_output_filename(content: str, ext: str, custom_name: str = None, ai_ti
     return f"/tmp/{base_name}.{ext}"
 
 
-# ========= 本地兜底规则 =========
+# ========= 本地兜底 =========
 
 def detect_intent_and_file_type_fallback(text: str):
     raw = text or ""
@@ -161,20 +161,6 @@ def detect_intent_and_file_type_fallback(text: str):
     return {"file_type": "pdf", "intent": "generic"}
 
 
-def apply_style_to_text(style: str, text: str) -> str:
-    if not style:
-        return text
-
-    style = style.strip()
-    if style == "正式":
-        return text
-    if style == "商务":
-        return text
-    if style == "汇报":
-        return text
-    return text
-
-
 def enhance_content(intent: str, content: str, style: str = None) -> str:
     clean = content.strip() if content and content.strip() else "（空内容）"
     lines = [line.strip() for line in clean.splitlines() if line.strip()]
@@ -193,7 +179,9 @@ def enhance_content(intent: str, content: str, style: str = None) -> str:
         clean = (
             "会议纪要\n"
             f"{clean}\n\n"
-            "行动项：\n"
+            "一、会议结论\n"
+            "待补充\n\n"
+            "二、行动项\n"
             "1. 待补充\n"
             "2. 待补充"
         )
@@ -215,13 +203,15 @@ def enhance_content(intent: str, content: str, style: str = None) -> str:
                 "合作协议\n"
                 "甲方：\n"
                 "乙方：\n"
-                "合作内容：\n"
+                "合作背景：\n"
                 f"{clean}\n"
+                "合作内容：\n"
                 "付款方式：\n"
                 "双方权责：\n"
+                "违约责任：\n"
             )
 
-    return apply_style_to_text(style, clean)
+    return clean
 
 
 # ========= AI =========
@@ -242,7 +232,11 @@ def call_ai(prompt: str):
                 "messages": [
                     {
                         "role": "system",
-                        "content": "你是一个专业办公文件助手，擅长判断文件类型、补全文档内容、补全表格字段、拆分PPT页面。"
+                        "content": (
+                            "你是一个专业办公文件助手。"
+                            "你擅长判断文件类型、补全文档内容、生成更完整的表格结构、"
+                            "以及把汇报拆成更适合PPT展示的页面结构。"
+                        )
                     },
                     {
                         "role": "user",
@@ -287,7 +281,7 @@ def ai_analyze(text: str, style: str = None):
   "slides": [
     {{
       "title": "页标题",
-      "bullets": ["要点1", "要点2"]
+      "bullets": ["要点1", "要点2", "要点3"]
     }}
   ]
 }}
@@ -297,12 +291,14 @@ def ai_analyze(text: str, style: str = None):
 2. 汇报、演示、路演、PPT → pptx
 3. 请假申请、合同、会议纪要、周报、日报、月报、正式文书 → docx
 4. 其他 → pdf
-5. title 要简洁明确
+5. title 必须简洁明确
 6. style 使用：正式 / 商务 / 汇报 / 默认
 7. content_text 必须是完整可直接写入文件的内容
 8. 如果 file_type 不是 xlsx，table_headers 和 table_rows 返回空数组
 9. 如果 file_type 不是 pptx，slides 返回空数组
-10. 如果用户信息不足，也要尽量合理补全
+10. 如果 file_type 是 xlsx，尽量生成完整表头，并至少生成 3 行合理示例数据
+11. 如果 file_type 是 pptx，尽量拆成 4 到 6 页，每页 3 到 5 个 bullet
+12. 如果用户信息不足，也要尽量合理补全
 """
     result = call_ai(prompt)
     if not result:
@@ -438,6 +434,22 @@ def autofit_worksheet(ws):
         ws.column_dimensions[col_letter].width = min(max_length + 4, 30)
 
 
+def style_excel_sheet(ws, style: str = None):
+    thin = Side(border_style="thin", color="CCCCCC")
+
+    for row in ws.iter_rows():
+        for cell in row:
+            cell.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+            cell.alignment = Alignment(vertical="center")
+
+    if ws.max_row >= 1:
+        for cell in ws[1]:
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(vertical="center", horizontal="center")
+            if style in ("正式", "商务", "汇报"):
+                cell.fill = PatternFill(fill_type="solid", fgColor="D9EAF7")
+
+
 def create_xlsx(text: str, output_path: str, style: str = None):
     wb = Workbook()
     ws = wb.active
@@ -446,14 +458,9 @@ def create_xlsx(text: str, output_path: str, style: str = None):
     rows = parse_table_text(text)
     for row_idx, row in enumerate(rows, start=1):
         for col_idx, value in enumerate(row, start=1):
-            cell = ws.cell(row=row_idx, column=col_idx, value=value)
-            cell.alignment = Alignment(vertical="center")
+            ws.cell(row=row_idx, column=col_idx, value=value)
 
-            if row_idx == 1 and len(rows) > 1:
-                cell.font = Font(bold=True)
-                if style in ("正式", "商务", "汇报"):
-                    cell.fill = PatternFill(fill_type="solid", fgColor="D9EAF7")
-
+    style_excel_sheet(ws, style)
     autofit_worksheet(ws)
     wb.save(output_path)
 
@@ -469,17 +476,13 @@ def create_xlsx_structured(output_path: str, headers, rows, style: str = None):
         rows = [["（空内容）"]]
 
     for col_idx, header in enumerate(headers, start=1):
-        cell = ws.cell(row=1, column=col_idx, value=header)
-        cell.font = Font(bold=True)
-        cell.alignment = Alignment(vertical="center", horizontal="center")
-        if style in ("正式", "商务", "汇报"):
-            cell.fill = PatternFill(fill_type="solid", fgColor="D9EAF7")
+        ws.cell(row=1, column=col_idx, value=header)
 
     for row_idx, row in enumerate(rows, start=2):
         for col_idx, value in enumerate(row, start=1):
-            cell = ws.cell(row=row_idx, column=col_idx, value=value)
-            cell.alignment = Alignment(vertical="center")
+            ws.cell(row=row_idx, column=col_idx, value=value)
 
+    style_excel_sheet(ws, style)
     autofit_worksheet(ws)
     wb.save(output_path)
 
@@ -552,6 +555,8 @@ def create_pptx_structured(output_path: str, title: str, slides_data, style: str
         tf.clear()
 
         bullets = item.get("bullets", []) or ["（空内容）"]
+        bullets = bullets[:5]
+
         for i, bullet in enumerate(bullets):
             p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
             p.text = bullet
