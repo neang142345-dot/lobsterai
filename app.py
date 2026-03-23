@@ -100,7 +100,7 @@ def webhook():
     if text == "/start":
         send_message(
             chat_id,
-            "你好，发包含“我需要制作 / 制作 / 生成文件”的内容给我，我会生成 PDF 回给你。"
+            "你好，发包含“PDF”的内容给我，我会生成 PDF 回给你。"
         )
         return jsonify({"ok": True})
 
@@ -115,7 +115,7 @@ def webhook():
 
         return jsonify({"ok": True})
 
-    send_message(chat_id, "请发送包含“我需要制作 / 制作 / 生成文件”的内容，我会生成 PDF。")
+    send_message(chat_id, "请发送包含“PDF”的内容，我会生成 PDF。")
     return jsonify({"ok": True})
 
 @app.route("/set_webhook")
