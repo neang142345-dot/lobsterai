@@ -13,8 +13,6 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "my-secret")
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-TRIGGER_WORDS = ["PDF"]
-
 def create_pdf(text: str, output_path: str):
     pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
 
@@ -104,19 +102,22 @@ def webhook():
         )
         return jsonify({"ok": True})
 
-    if any(word in text for word in TRIGGER_WORDS):
-        send_message(chat_id, "已收到，正在为你生成 PDF...")
-
-        timestamp = int(time.time())
-        file_path = f"/tmp/generated_{timestamp}.pdf"
-
-        create_pdf(clean_text, file_path)
-        send_document(chat_id, file_path, "你的 PDF 已生成")
-
-        return jsonify({"ok": True})
-
-    send_message(chat_id, "请发送包含“PDF”的内容，我会生成 PDF。")
+    if text.startswith("/"):
+    send_message(chat_id, "请直接发送正文内容，我会自动生成 PDF。")
     return jsonify({"ok": True})
+
+if text.strip():
+    send_message(chat_id, "已收到，正在为你生成 PDF...")
+
+    timestamp = int(time.time())
+    file_path = f"/tmp/generated_{timestamp}.pdf"
+
+    create_pdf(clean_text, file_path)
+    send_document(chat_id, file_path, "你的 PDF 已生成")
+    return jsonify({"ok": True})
+
+send_message(chat_id, "请直接发送你要生成成 PDF 的文字内容。")
+return jsonify({"ok": True})
 
 @app.route("/set_webhook")
 def set_webhook():
