@@ -1,3 +1,6 @@
 flask
 requests
 reportlab
+python-docx
+openpyxl
+python-pptx
