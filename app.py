@@ -297,7 +297,12 @@ def ai_analyze(text: str, style: str = None):
 8. 如果 file_type 不是 xlsx，table_headers 和 table_rows 返回空数组
 9. 如果 file_type 不是 pptx，slides 返回空数组
 10. 如果 file_type 是 xlsx，尽量生成完整表头，并至少生成 3 行合理示例数据
-11. 如果 file_type 是 pptx，尽量拆成 4 到 6 页，每页 3 到 5 个 bullet
+11. 如果 file_type 是 pptx：
+   - 尽量拆成 4 到 6 页
+   - 每页只保留最核心信息
+   - 每页最多 4 个 bullet
+   - bullet 必须是短句，不要写成长段
+   - 要适合口头汇报，像老板汇报材料
 12. 如果用户信息不足，也要尽量合理补全
 """
     result = call_ai(prompt)
@@ -499,71 +504,74 @@ def parse_ppt_content(text: str):
     return title, bullets
 
 
-def split_bullets(bullets, chunk_size=5):
-    return [bullets[i:i + chunk_size] for i in range(0, len(bullets), chunk_size)]
-
-
-def create_pptx(text: str, output_path: str, style: str = None):
-    prs = Presentation()
-    title, bullets = parse_ppt_content(text)
-
-    subtitle = "由 TG 文件机器人自动生成"
-    if style:
-        subtitle += f"｜风格：{style}"
-
-    slide = prs.slides.add_slide(prs.slide_layouts[0])
-    slide.shapes.title.text = title
-    slide.placeholders[1].text = subtitle
-
-    bullet_groups = split_bullets(bullets, 5)
-
-    for idx, chunk in enumerate(bullet_groups):
-        slide = prs.slides.add_slide(prs.slide_layouts[1])
-        slide.shapes.title.text = f"{title}（第{idx + 1}页）" if len(bullet_groups) > 1 else "内容"
-
-        tf = slide.placeholders[1].text_frame
-        tf.clear()
-
-        for j, bullet in enumerate(chunk):
-            p = tf.paragraphs[0] if j == 0 else tf.add_paragraph()
-            p.text = bullet
-            p.level = 0
-            p.font.size = Pt(22 if style == "汇报" else 20)
-
-    prs.save(output_path)
-
-
 def create_pptx_structured(output_path: str, title: str, slides_data, style: str = None):
     prs = Presentation()
 
-    subtitle = "由 TG 文件机器人自动生成"
-    if style:
-        subtitle += f"｜风格：{style}"
-
+    # ========= 封面页 =========
     slide = prs.slides.add_slide(prs.slide_layouts[0])
     slide.shapes.title.text = title
+
+    subtitle = "业务分析报告"
+    if style == "汇报":
+        subtitle = "管理层汇报材料"
+    elif style == "商务":
+        subtitle = "商务演示文稿"
+    elif style == "正式":
+        subtitle = "正式演示文稿"
+
     slide.placeholders[1].text = subtitle
 
+    title_para = slide.shapes.title.text_frame.paragraphs[0]
+    title_para.font.size = Pt(30)
+    title_para.font.bold = True
+
+    sub_para = slide.placeholders[1].text_frame.paragraphs[0]
+    sub_para.font.size = Pt(16)
+
+    # ========= 内容页 =========
     if not slides_data:
         slides_data = [{"title": "内容", "bullets": ["（空内容）"]}]
 
     for item in slides_data:
-        slide = prs.slides.add_slide(prs.slide_layouts[1])
-        slide.shapes.title.text = item.get("title", "内容")
+        slide = prs.slides.add_slide(prs.slide_layouts[5])
 
-        tf = slide.placeholders[1].text_frame
+        title_box = slide.shapes.add_textbox(Pt(36), Pt(24), Pt(620), Pt(40))
+        tf_title = title_box.text_frame
+        tf_title.clear()
+        p_title = tf_title.paragraphs[0]
+        p_title.text = item.get("title", "内容")
+        p_title.font.size = Pt(24)
+        p_title.font.bold = True
+
+        sub_box = slide.shapes.add_textbox(Pt(36), Pt(60), Pt(620), Pt(24))
+        tf_sub = sub_box.text_frame
+        tf_sub.clear()
+        p_sub = tf_sub.paragraphs[0]
+        p_sub.text = "核心要点"
+        p_sub.font.size = Pt(10)
+
+        content_box = slide.shapes.add_textbox(Pt(50), Pt(110), Pt(620), Pt(320))
+        tf = content_box.text_frame
+        tf.word_wrap = True
         tf.clear()
 
         bullets = item.get("bullets", []) or ["（空内容）"]
-        bullets = bullets[:5]
+        bullets = bullets[:4]
 
         for i, bullet in enumerate(bullets):
             p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
             p.text = bullet
             p.level = 0
-            p.font.size = Pt(22 if style == "汇报" else 20)
+            p.font.size = Pt(20 if style == "汇报" else 18)
+            p.space_after = Pt(10)
 
     prs.save(output_path)
+
+
+def create_pptx(text: str, output_path: str, style: str = None):
+    title, bullets = parse_ppt_content(text)
+    slides_data = [{"title": title, "bullets": bullets[:4]}]
+    create_pptx_structured(output_path, title, slides_data, style)
 
 
 # ========= 路由 =========
