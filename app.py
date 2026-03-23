@@ -6,11 +6,11 @@ from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from docx import Document
 from openpyxl import Workbook
 from pptx import Presentation
-from pptx.util import Inches, Pt
+from pptx.util import Pt
 import requests
 import os
 import re
-import time
+import xmind
 
 app = Flask(__name__)
 
@@ -45,6 +45,40 @@ def normalize_text(text: str) -> str:
     return text.replace("\r\n", "\n").strip()
 
 
+def sanitize_filename(name: str) -> str:
+    if not name:
+        return "文件"
+
+    name = name.strip()
+    name = re.sub(r'[\/\\:\*\?"<>\|]+', "_", name)
+    name = re.sub(r"\s+", " ", name).strip()
+
+    if not name:
+        name = "文件"
+
+    return name[:50]
+
+
+def extract_custom_filename(text: str):
+    """
+    支持：
+    文件名：xxx
+    文件名: xxx
+    """
+    lines = normalize_text(text).splitlines()
+    custom_name = None
+    remaining_lines = []
+
+    for line in lines:
+        stripped = line.strip()
+        if custom_name is None and (stripped.startswith("文件名：") or stripped.startswith("文件名:")):
+            custom_name = stripped.split("：", 1)[1].strip() if "：" in stripped else stripped.split(":", 1)[1].strip()
+        else:
+            remaining_lines.append(line)
+
+    return custom_name, "\n".join(remaining_lines).strip()
+
+
 def detect_file_type(text: str) -> str:
     t = (text or "").lower()
 
@@ -59,7 +93,6 @@ def detect_file_type(text: str) -> str:
     if "pdf" in t:
         return "pdf"
 
-    # 默认仍然给 PDF
     return "pdf"
 
 
@@ -101,8 +134,13 @@ def build_title(text: str) -> str:
     return first_line if first_line else "自动生成文档"
 
 
-def safe_filename(ext: str) -> str:
-    return f"/tmp/generated_{int(time.time())}.{ext}"
+def build_output_filename(content: str, ext: str, custom_name: str = None) -> str:
+    if custom_name:
+        base_name = sanitize_filename(custom_name)
+    else:
+        base_name = sanitize_filename(build_title(content))
+
+    return f"/tmp/{base_name}.{ext}"
 
 
 def wrap_text_lines(text: str, c, font_name: str, font_size: int, max_width: float):
@@ -135,11 +173,6 @@ def wrap_text_lines(text: str, c, font_name: str, font_size: int, max_width: flo
 
 
 def parse_table_text(text: str):
-    """
-    Excel 简单解析规则：
-    1. 多行，逗号/中文逗号/制表符分列
-    2. 没有明显分隔符时，一行一列
-    """
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if not lines:
         return [["（空内容）"]]
@@ -158,11 +191,6 @@ def parse_table_text(text: str):
 
 
 def parse_ppt_content(text: str):
-    """
-    简单规则：
-    - 第一行做标题
-    - 后续每行做 bullet
-    """
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if not lines:
         return "自动生成演示文稿", ["（空内容）"]
@@ -173,11 +201,6 @@ def parse_ppt_content(text: str):
 
 
 def parse_mindmap_outline(text: str):
-    """
-    简单导图规则：
-    - 第一行做主题
-    - 后续每行做一级节点
-    """
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if not lines:
         return "思维导图主题", ["（空内容）"]
@@ -257,12 +280,10 @@ def create_pptx(text: str, output_path: str):
     prs = Presentation()
     title, bullets = parse_ppt_content(text)
 
-    # 标题页
     slide = prs.slides.add_slide(prs.slide_layouts[0])
     slide.shapes.title.text = title
     slide.placeholders[1].text = "由 TG 文件机器人自动生成"
 
-    # 内容页
     chunk_size = 6
     for i in range(0, len(bullets), chunk_size):
         chunk = bullets[i:i + chunk_size]
@@ -281,19 +302,23 @@ def create_pptx(text: str, output_path: str):
     prs.save(output_path)
 
 
-def create_xmind_markdown(text: str, output_path: str):
+def create_xmind(text: str, output_path: str):
     """
-    先输出 Markdown 脑图大纲文件。
-    后续如果要原生 .xmind，只替换这个函数。
+    生成真正的 .xmind 文件
     """
-    root, children = parse_mindmap_outline(text)
+    workbook = xmind.load(output_path)
+    sheet = workbook.getPrimarySheet()
+    sheet.setTitle("思维导图")
 
-    lines = [f"# {root}", ""]
+    root_topic = sheet.getRootTopic()
+    root_title, children = parse_mindmap_outline(text)
+    root_topic.setTitle(root_title)
+
     for child in children:
-        lines.append(f"- {child}")
+        topic = root_topic.addSubTopic()
+        topic.setTitle(child)
 
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+    xmind.save(workbook, path=output_path)
 
 
 # ========= 路由 =========
@@ -326,7 +351,7 @@ def webhook():
     if text == "/start":
         send_message(
             chat_id,
-            "你好，直接发送内容即可。我会自动识别并生成 PDF / Word / Excel / PPT / 脑图大纲文件。"
+            "你好，直接发送内容即可。我会自动识别并生成 PDF / Word / Excel / PPT / XMind 真文件。支持“文件名：xxx”自定义文件名。"
         )
         return jsonify({"ok": True})
 
@@ -335,7 +360,8 @@ def webhook():
         return jsonify({"ok": True})
 
     file_type = detect_file_type(text)
-    content = strip_leading_type_command(text)
+    custom_name, text_without_filename = extract_custom_filename(text)
+    content = strip_leading_type_command(text_without_filename)
 
     if not content:
         send_message(chat_id, "请发送你要生成成文件的文字内容。")
@@ -345,32 +371,32 @@ def webhook():
 
     try:
         if file_type == "pdf":
-            file_path = safe_filename("pdf")
+            file_path = build_output_filename(content, "pdf", custom_name)
             create_pdf(content, file_path)
             send_document(chat_id, file_path, "你的 PDF 已生成")
 
         elif file_type == "docx":
-            file_path = safe_filename("docx")
+            file_path = build_output_filename(content, "docx", custom_name)
             create_docx(content, file_path)
             send_document(chat_id, file_path, "你的 Word 文档已生成")
 
         elif file_type == "xlsx":
-            file_path = safe_filename("xlsx")
+            file_path = build_output_filename(content, "xlsx", custom_name)
             create_xlsx(content, file_path)
             send_document(chat_id, file_path, "你的 Excel 文件已生成")
 
         elif file_type == "pptx":
-            file_path = safe_filename("pptx")
+            file_path = build_output_filename(content, "pptx", custom_name)
             create_pptx(content, file_path)
             send_document(chat_id, file_path, "你的 PPT 文件已生成")
 
         elif file_type == "xmind":
-            file_path = safe_filename("md")
-            create_xmind_markdown(content, file_path)
-            send_document(chat_id, file_path, "你的脑图大纲文件已生成（Markdown 版）")
+            file_path = build_output_filename(content, "xmind", custom_name)
+            create_xmind(content, file_path)
+            send_document(chat_id, file_path, "你的 XMind 文件已生成")
 
         else:
-            file_path = safe_filename("pdf")
+            file_path = build_output_filename(content, "pdf", custom_name)
             create_pdf(content, file_path)
             send_document(chat_id, file_path, "你的 PDF 已生成")
 
