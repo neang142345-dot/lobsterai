@@ -98,26 +98,27 @@ def webhook():
     if text == "/start":
         send_message(
             chat_id,
-            "你好，发包含“PDF”的内容给我，我会生成 PDF 回给你。"
+            "你好，直接发送内容，我会自动生成 PDF 给你。"
         )
         return jsonify({"ok": True})
 
     if text.startswith("/"):
-    send_message(chat_id, "请直接发送正文内容，我会自动生成 PDF。")
+        send_message(chat_id, "请直接发送正文内容。")
+        return jsonify({"ok": True})
+
+    if text.strip():
+        send_message(chat_id, "已收到，正在生成 PDF...")
+
+        timestamp = int(time.time())
+        file_path = f"/tmp/generated_{timestamp}.pdf"
+
+        create_pdf(clean_text, file_path)
+        send_document(chat_id, file_path, "你的 PDF 已生成")
+
+        return jsonify({"ok": True})
+
+    send_message(chat_id, "请发送内容。")
     return jsonify({"ok": True})
-
-if text.strip():
-    send_message(chat_id, "已收到，正在为你生成 PDF...")
-
-    timestamp = int(time.time())
-    file_path = f"/tmp/generated_{timestamp}.pdf"
-
-    create_pdf(clean_text, file_path)
-    send_document(chat_id, file_path, "你的 PDF 已生成")
-    return jsonify({"ok": True})
-
-send_message(chat_id, "请直接发送你要生成成 PDF 的文字内容。")
-return jsonify({"ok": True})
 
 @app.route("/set_webhook")
 def set_webhook():
