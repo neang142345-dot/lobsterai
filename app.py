@@ -16,18 +16,19 @@ TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 TRIGGER_WORDS = ["我需要制作", "制作", "生成文件"]
 
 def create_pdf(text: str, output_path: str):
+    pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+
     c = canvas.Canvas(output_path, pagesize=A4)
     width, height = A4
 
     y = height - 50
-    c.setFont("Helvetica", 12)
+    c.setFont("STSong-Light", 18)
+    c.drawString(50, y, "Generated PDF")
+    y -= 40
 
-    title = "Generated PDF"
-    c.drawString(50, y, title)
-    y -= 30
+    c.setFont("STSong-Light", 12)
 
-    # 简单分行
-    max_chars_per_line = 40
+    max_chars_per_line = 28
     lines = []
     raw_lines = text.splitlines() if text else ["(empty)"]
 
@@ -41,10 +42,10 @@ def create_pdf(text: str, output_path: str):
     for line in lines:
         if y < 50:
             c.showPage()
-            c.setFont("Helvetica", 12)
+            c.setFont("STSong-Light", 12)
             y = height - 50
         c.drawString(50, y, line)
-        y -= 20
+        y -= 22
 
     c.save()
 
