@@ -20,8 +20,19 @@ def create_pdf(text: str, output_path: str):
     width, height = A4
 
     y = height - 50
+    title = text.strip() if text and text.strip() else "自动生成文档"
+    max_width = width - 100
+
     c.setFont("STSong-Light", 18)
-    c.drawString(50, y, "Generated PDF")
+
+    while c.stringWidth(title, "STSong-Light", 18) > max_width and len(title) > 1:
+          title = title[:-1]
+
+    if title != text.strip():
+    title = title[:-1] + "…"
+
+    text_width = c.stringWidth(title, "STSong-Light", 18)
+    c.drawString((width - text_width) / 2, y, title)
     y -= 40
 
     c.setFont("STSong-Light", 12)
