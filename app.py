@@ -30,7 +30,7 @@ from pptx.dml.color import RGBColor
 
 # =============================================================================
 
-app = Flask(**name**)
+app = Flask(__name__)
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("tg_office_assistant")
 
