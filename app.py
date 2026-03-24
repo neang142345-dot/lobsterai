@@ -4,14 +4,19 @@ from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from docx import Document
+from docx.shared import Pt as DocxPt
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from pptx import Presentation
-from pptx.util import Pt
+from pptx.util import Pt, Inches
+from pptx.enum.shapes import MSO_SHAPE
+from pptx.dml.color import RGBColor
 import requests
 import os
 import re
 import json
+import time
 
 app = Flask(__name__)
 
@@ -39,7 +44,7 @@ def send_document(chat_id: int, file_path: str, caption: str = "文件已生成"
             f"{TELEGRAM_API}/sendDocument",
             data={"chat_id": chat_id, "caption": caption},
             files={"document": f},
-            timeout=60
+            timeout=120
         )
 
 
@@ -88,23 +93,45 @@ def extract_style(text: str):
     return style, "\n".join(remaining_lines).strip()
 
 
-def strip_leading_type_command(text: str) -> str:
+def extract_theme(text: str):
+    lines = normalize_text(text).splitlines()
+    theme = None
+    remaining_lines = []
+
+    for line in lines:
+        stripped = line.strip()
+        if theme is None and (stripped.startswith("主题：") or stripped.startswith("主题:")):
+            theme = stripped.split("：", 1)[1].strip() if "：" in stripped else stripped.split(":", 1)[1].strip()
+        else:
+            remaining_lines.append(line)
+
+    return theme, "\n".join(remaining_lines).strip()
+
+
+def strip_control_phrases(text: str) -> str:
     cleaned = normalize_text(text)
+
     prefixes = [
         "生成 pdf：", "生成pdf：", "生成 pdf:", "生成pdf:",
         "生成 word：", "生成word：", "生成 word:", "生成word:",
         "生成 excel：", "生成excel：", "生成 excel:", "生成excel:",
         "生成 ppt：", "生成ppt：", "生成 ppt:", "生成ppt:",
+        "生成 docx：", "生成docx：", "生成 docx:", "生成docx:",
+        "生成 xlsx：", "生成xlsx：", "生成 xlsx:", "生成xlsx:",
+        "生成 pptx：", "生成pptx：", "生成 pptx:", "生成pptx:",
         "制作 pdf：", "制作pdf：", "制作 pdf:", "制作pdf:",
         "制作 word：", "制作word：", "制作 word:", "制作word:",
         "制作 excel：", "制作excel：", "制作 excel:", "制作excel:",
         "制作 ppt：", "制作ppt：", "制作 ppt:", "制作ppt:",
-        "帮我生成", "帮我制作", "生成文件", "生成文档", "生成", "制作文件", "制作文档", "制作"
+        "帮我生成", "帮我制作", "生成文件", "生成文档", "生成", "制作文件", "制作文档", "制作",
+        "发我pdf", "回传pdf", "回传我", "发我", "整理成pdf", "整理成word", "整理成ppt", "整理成excel"
     ]
+
     for prefix in prefixes:
         if cleaned.lower().startswith(prefix.lower()):
             cleaned = cleaned[len(prefix):].strip()
             break
+
     return cleaned
 
 
@@ -123,7 +150,79 @@ def build_output_filename(content: str, ext: str, custom_name: str = None, ai_ti
         base_name = sanitize_filename(ai_title)
     else:
         base_name = sanitize_filename(build_title(content))
-    return f"/tmp/{base_name}.{ext}"
+
+    timestamp = int(time.time())
+    return f"/tmp/{base_name}_{timestamp}.{ext}"
+
+
+def extract_effective_request(text: str, reply_to_message: dict):
+    current_text = normalize_text(text)
+    reply_text = ""
+
+    if reply_to_message:
+        reply_text = normalize_text(reply_to_message.get("text", ""))
+
+    command_like = any(kw in current_text.lower() for kw in [
+        "pdf", "docx", "word", "xlsx", "excel", "ppt", "pptx",
+        "生成", "回传", "发我", "整理"
+    ])
+
+    if reply_text and command_like and len(current_text) <= 30:
+        return reply_text + "\n" + current_text
+
+    return current_text
+
+
+# ========= V5 主题系统 =========
+
+def get_theme_palette(theme: str):
+    theme = (theme or "商务蓝").strip()
+
+    if theme == "深色商务":
+        return {
+            "name": "深色商务",
+            "primary": RGBColor(25, 42, 86),
+            "secondary": RGBColor(46, 64, 113),
+            "accent": RGBColor(93, 173, 226),
+            "text": RGBColor(255, 255, 255),
+            "subtext": RGBColor(220, 220, 220),
+            "light_fill": "D6EAF8",
+            "excel_header": "2E4053"
+        }
+
+    if theme == "极简白":
+        return {
+            "name": "极简白",
+            "primary": RGBColor(40, 40, 40),
+            "secondary": RGBColor(150, 150, 150),
+            "accent": RGBColor(91, 155, 213),
+            "text": RGBColor(40, 40, 40),
+            "subtext": RGBColor(120, 120, 120),
+            "light_fill": "F2F4F4",
+            "excel_header": "DDEBF7"
+        }
+
+    # 默认：商务蓝
+    return {
+        "name": "商务蓝",
+        "primary": RGBColor(44, 95, 153),
+        "secondary": RGBColor(91, 155, 213),
+        "accent": RGBColor(23, 162, 184),
+        "text": RGBColor(30, 30, 30),
+        "subtext": RGBColor(100, 100, 100),
+        "light_fill": "D9EAF7",
+        "excel_header": "D9EAF7"
+    }
+
+
+def choose_subtitle_by_style(style: str):
+    if style == "汇报":
+        return "管理层汇报材料"
+    if style == "商务":
+        return "商务演示文稿"
+    if style == "正式":
+        return "正式演示文稿"
+    return "业务分析报告"
 
 
 # ========= 本地兜底 =========
@@ -132,31 +231,36 @@ def detect_intent_and_file_type_fallback(text: str):
     raw = text or ""
     t = raw.lower()
 
-    if "xlsx" in t or "excel" in t or "表格" in raw or "工资表" in raw or "销售表" in raw or "统计表" in raw:
+    if "pdf" in t:
+        return {"file_type": "pdf", "intent": "generic"}
+    if "docx" in t or "word" in t:
+        return {"file_type": "docx", "intent": "document"}
+    if "xlsx" in t or "excel" in t:
+        return {"file_type": "xlsx", "intent": "table"}
+    if "pptx" in t or re.search(r"\bppt\b", t):
+        return {"file_type": "pptx", "intent": "presentation"}
+
+    if "表格" in raw or "工资表" in raw or "销售表" in raw or "统计表" in raw or "清单" in raw:
         if "工资" in raw:
             return {"file_type": "xlsx", "intent": "salary_table"}
         if "销售" in raw:
             return {"file_type": "xlsx", "intent": "sales_table"}
         return {"file_type": "xlsx", "intent": "table"}
 
-    if "pptx" in t or re.search(r"\bppt\b", t) or "幻灯片" in raw or "演示文稿" in raw or "汇报" in raw or "路演" in raw:
+    if "汇报" in raw or "演示" in raw or "路演" in raw or "老板汇报" in raw or "公司经营分析" in raw:
         return {"file_type": "pptx", "intent": "presentation"}
 
-    if "docx" in t or "word" in t or "请假申请" in raw or "合同" in raw or "申请书" in raw:
-        if "请假" in raw:
-            return {"file_type": "docx", "intent": "leave"}
-        if "合同" in raw:
-            return {"file_type": "docx", "intent": "contract"}
-        return {"file_type": "docx", "intent": "document"}
+    if "请假申请" in raw or "申请书" in raw:
+        return {"file_type": "docx", "intent": "leave"}
+
+    if "合同" in raw or "协议" in raw:
+        return {"file_type": "docx", "intent": "contract"}
 
     if "会议纪要" in raw:
         return {"file_type": "docx", "intent": "meeting_minutes"}
 
-    if "周报" in raw or "月报" in raw or "日报" in raw:
+    if "周报" in raw or "月报" in raw or "日报" in raw or "总结" in raw:
         return {"file_type": "docx", "intent": "weekly_report"}
-
-    if "pdf" in t:
-        return {"file_type": "pdf", "intent": "generic"}
 
     return {"file_type": "pdf", "intent": "generic"}
 
@@ -168,16 +272,16 @@ def enhance_content(intent: str, content: str, style: str = None) -> str:
     if intent == "leave":
         if len(lines) <= 3:
             clean = (
-                "请假申请\n"
+                "请假申请\n\n"
                 "尊敬的领导：\n"
-                f"本人因{clean}，特申请请假一天，请予批准。\n"
+                f"本人因{clean}，特申请请假一天，请予批准。\n\n"
                 "此致\n"
                 "敬礼"
             )
 
     elif intent == "meeting_minutes":
         clean = (
-            "会议纪要\n"
+            "会议纪要\n\n"
             f"{clean}\n\n"
             "一、会议结论\n"
             "待补充\n\n"
@@ -188,23 +292,23 @@ def enhance_content(intent: str, content: str, style: str = None) -> str:
 
     elif intent == "weekly_report":
         clean = (
-            "工作汇报\n"
-            "一、本周完成\n"
+            "工作汇报\n\n"
+            "一、本期完成\n"
             f"{clean}\n\n"
             "二、存在问题\n"
             "待补充\n\n"
-            "三、下周计划\n"
+            "三、下一步计划\n"
             "待补充"
         )
 
     elif intent == "contract":
         if len(lines) <= 5:
             clean = (
-                "合作协议\n"
+                "合作协议\n\n"
                 "甲方：\n"
                 "乙方：\n"
                 "合作背景：\n"
-                f"{clean}\n"
+                f"{clean}\n\n"
                 "合作内容：\n"
                 "付款方式：\n"
                 "双方权责：\n"
@@ -234,8 +338,9 @@ def call_ai(prompt: str):
                         "role": "system",
                         "content": (
                             "你是一个专业办公文件助手。"
-                            "你擅长判断文件类型、补全文档内容、生成更完整的表格结构、"
-                            "以及把汇报拆成更适合PPT展示的页面结构。"
+                            "你必须把用户需求转换成最终可生成文件的结构化结果。"
+                            "不要把纯文本回复当成最终结果。"
+                            "你的目标是帮助系统生成真实文件：pdf、docx、xlsx、pptx。"
                         )
                     },
                     {
@@ -245,7 +350,7 @@ def call_ai(prompt: str):
                 ],
                 "temperature": 0.3
             },
-            timeout=30
+            timeout=45
         )
         if resp.status_code != 200:
             return None
@@ -287,23 +392,25 @@ def ai_analyze(text: str, style: str = None):
 }}
 
 规则：
-1. 表格、工资表、销售表、清单、统计 → xlsx
-2. 汇报、演示、路演、PPT → pptx
-3. 请假申请、合同、会议纪要、周报、日报、月报、正式文书 → docx
-4. 其他 → pdf
-5. title 必须简洁明确
-6. style 使用：正式 / 商务 / 汇报 / 默认
-7. content_text 必须是完整可直接写入文件的内容
-8. 如果 file_type 不是 xlsx，table_headers 和 table_rows 返回空数组
-9. 如果 file_type 不是 pptx，slides 返回空数组
-10. 如果 file_type 是 xlsx，尽量生成完整表头，并至少生成 3 行合理示例数据
-11. 如果 file_type 是 pptx：
+1. 目标是生成真实文件，而不是返回说明文字。
+2. 表格、工资表、销售表、清单、统计 → xlsx
+3. 汇报、演示、路演、PPT、老板汇报、公司经营分析 → pptx
+4. 请假申请、合同、会议纪要、周报、日报、月报、正式文书 → docx
+5. 其他 → pdf
+6. title 必须简洁明确
+7. style 使用：正式 / 商务 / 汇报 / 默认
+8. content_text 必须是完整可直接写入文件的内容
+9. 如果 file_type 不是 xlsx，table_headers 和 table_rows 返回空数组
+10. 如果 file_type 不是 pptx，slides 返回空数组
+11. 如果 file_type 是 xlsx，尽量生成完整表头，并至少生成 3 行合理示例数据
+12. 如果 file_type 是 pptx：
    - 尽量拆成 4 到 6 页
    - 每页只保留最核心信息
    - 每页最多 4 个 bullet
    - bullet 必须是短句，不要写成长段
    - 要适合口头汇报，像老板汇报材料
-12. 如果用户信息不足，也要尽量合理补全
+13. 如果用户说“整理成文件”“发我pdf”“回传我”“生成pdf”之类，仍然必须返回文件所需结构，不要输出说明。
+14. 如果用户信息不足，也要尽量合理补全。
 """
     result = call_ai(prompt)
     if not result:
@@ -325,8 +432,8 @@ def wrap_text_lines(text: str, c, font_name: str, font_size: int, max_width: flo
     raw_lines = text.splitlines()
 
     for raw in raw_lines:
-        line = raw.strip()
-        if not line:
+        line = raw.rstrip()
+        if not line.strip():
             wrapped.append("")
             continue
 
@@ -346,61 +453,87 @@ def wrap_text_lines(text: str, c, font_name: str, font_size: int, max_width: flo
     return wrapped if wrapped else ["（空内容）"]
 
 
-def create_pdf(text: str, output_path: str, style: str = None):
+def create_pdf(text: str, output_path: str, style: str = None, theme: str = None):
     pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+    palette = get_theme_palette(theme)
 
     c = canvas.Canvas(output_path, pagesize=A4)
     width, height = A4
     title = build_title(text)
-    y = height - 50
-    max_title_width = width - 100
 
-    c.setFont("STSong-Light", 18)
+    # 顶部色带
+    c.setFillColorRGB(
+        palette["primary"][0] / 255.0,
+        palette["primary"][1] / 255.0,
+        palette["primary"][2] / 255.0
+    )
+    c.rect(0, height - 90, width, 90, fill=1, stroke=0)
 
-    original_title = title
-    while c.stringWidth(title, "STSong-Light", 18) > max_title_width and len(title) > 1:
-        title = title[:-1]
-    if title != original_title and len(title) > 1:
-        title = title[:-1] + "…"
+    # 标题
+    c.setFillColorRGB(1, 1, 1)
+    c.setFont("STSong-Light", 20)
+    c.drawCentredString(width / 2, height - 45, title)
 
-    title_width = c.stringWidth(title, "STSong-Light", 18)
-    c.drawString((width - title_width) / 2, y, title)
-    y -= 40
+    # 风格 / 主题
+    c.setFont("STSong-Light", 10)
+    info = f"风格：{style or '默认'}    主题：{palette['name']}"
+    c.drawString(40, height - 78, info)
 
-    if style:
-        c.setFont("STSong-Light", 10)
-        c.drawString(50, y, f"风格：{style}")
-        y -= 20
-
+    # 正文
+    y = height - 120
+    c.setFillColorRGB(0, 0, 0)
     c.setFont("STSong-Light", 12)
-    max_body_width = width - 100
+    max_body_width = width - 80
     lines = wrap_text_lines(text, c, "STSong-Light", 12, max_body_width)
 
     for line in lines:
         if y < 50:
             c.showPage()
-            c.setFont("STSong-Light", 12)
             y = height - 50
-        c.drawString(50, y, line)
-        y -= 22
+            c.setFont("STSong-Light", 12)
+        c.drawString(40, y, line)
+        y -= 24
 
     c.save()
 
 
 # ========= Word =========
 
-def create_docx(text: str, output_path: str, style: str = None):
+def add_doc_divider(doc):
+    p = doc.add_paragraph()
+    run = p.add_run("─" * 42)
+    run.font.size = DocxPt(10)
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+
+def create_docx(text: str, output_path: str, style: str = None, theme: str = None):
+    palette = get_theme_palette(theme)
     doc = Document()
     title = build_title(text)
 
-    doc.add_heading(title, level=1)
+    # 标题
+    h = doc.add_heading("", level=1)
+    h.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = h.add_run(title)
+    run.font.size = DocxPt(20)
+    run.font.bold = True
 
-    if style:
-        doc.add_paragraph(f"风格：{style}")
+    # 副标题
+    meta = doc.add_paragraph()
+    meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    meta_run = meta.add_run(f"风格：{style or '默认'}   主题：{palette['name']}")
+    meta_run.font.size = DocxPt(10)
+
+    add_doc_divider(doc)
+    doc.add_paragraph("")
 
     paragraphs = text.splitlines() if text else ["（空内容）"]
-    for p in paragraphs:
-        doc.add_paragraph(p if p.strip() else "")
+    for line in paragraphs:
+        p = doc.add_paragraph(line if line.strip() else "")
+        p.paragraph_format.space_after = DocxPt(8)
+        p.paragraph_format.line_spacing = 1.5
+        for r in p.runs:
+            r.font.size = DocxPt(12)
 
     doc.save(output_path)
 
@@ -439,23 +572,23 @@ def autofit_worksheet(ws):
         ws.column_dimensions[col_letter].width = min(max_length + 4, 30)
 
 
-def style_excel_sheet(ws, style: str = None):
+def style_excel_sheet(ws, style: str = None, theme: str = None):
+    palette = get_theme_palette(theme)
     thin = Side(border_style="thin", color="CCCCCC")
 
     for row in ws.iter_rows():
         for cell in row:
             cell.border = Border(left=thin, right=thin, top=thin, bottom=thin)
-            cell.alignment = Alignment(vertical="center")
+            cell.alignment = Alignment(vertical="center", horizontal="center")
 
     if ws.max_row >= 1:
         for cell in ws[1]:
-            cell.font = Font(bold=True)
+            cell.font = Font(bold=True, color="FFFFFF" if theme == "深色商务" else "000000")
             cell.alignment = Alignment(vertical="center", horizontal="center")
-            if style in ("正式", "商务", "汇报"):
-                cell.fill = PatternFill(fill_type="solid", fgColor="D9EAF7")
+            cell.fill = PatternFill(fill_type="solid", fgColor=palette["excel_header"])
 
 
-def create_xlsx(text: str, output_path: str, style: str = None):
+def create_xlsx(text: str, output_path: str, style: str = None, theme: str = None):
     wb = Workbook()
     ws = wb.active
     ws.title = "Sheet1"
@@ -465,12 +598,12 @@ def create_xlsx(text: str, output_path: str, style: str = None):
         for col_idx, value in enumerate(row, start=1):
             ws.cell(row=row_idx, column=col_idx, value=value)
 
-    style_excel_sheet(ws, style)
+    style_excel_sheet(ws, style, theme)
     autofit_worksheet(ws)
     wb.save(output_path)
 
 
-def create_xlsx_structured(output_path: str, headers, rows, style: str = None):
+def create_xlsx_structured(output_path: str, headers, rows, style: str = None, theme: str = None):
     wb = Workbook()
     ws = wb.active
     ws.title = "Sheet1"
@@ -487,71 +620,75 @@ def create_xlsx_structured(output_path: str, headers, rows, style: str = None):
         for col_idx, value in enumerate(row, start=1):
             ws.cell(row=row_idx, column=col_idx, value=value)
 
-    style_excel_sheet(ws, style)
+    style_excel_sheet(ws, style, theme)
     autofit_worksheet(ws)
     wb.save(output_path)
 
 
 # ========= PPT =========
 
-def parse_ppt_content(text: str):
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if not lines:
-        return "自动生成演示文稿", ["（空内容）"]
+def create_slide_header(slide, title_text, palette):
+    title_box = slide.shapes.add_textbox(Pt(32), Pt(24), Pt(640), Pt(40))
+    tf_title = title_box.text_frame
+    tf_title.clear()
+    p_title = tf_title.paragraphs[0]
+    p_title.text = title_text
+    p_title.font.size = Pt(24)
+    p_title.font.bold = True
+    p_title.font.name = "Microsoft YaHei"
+    p_title.font.color.rgb = palette["primary"]
 
-    title = lines[0]
-    bullets = lines[1:] if len(lines) > 1 else ["（无补充内容）"]
-    return title, bullets
+    line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Pt(32), Pt(70), Pt(640), Pt(3))
+    line.fill.solid()
+    line.fill.fore_color.rgb = palette["secondary"]
+    line.line.fill.background()
 
 
-def create_pptx_structured(output_path: str, title: str, slides_data, style: str = None):
+def create_pptx_structured(output_path: str, title: str, slides_data, style: str = None, theme: str = None):
     prs = Presentation()
+    palette = get_theme_palette(theme)
 
-    # ========= 封面页 =========
-    slide = prs.slides.add_slide(prs.slide_layouts[0])
-    slide.shapes.title.text = title
+    # 封面页
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
 
-    subtitle = "业务分析报告"
-    if style == "汇报":
-        subtitle = "管理层汇报材料"
-    elif style == "商务":
-        subtitle = "商务演示文稿"
-    elif style == "正式":
-        subtitle = "正式演示文稿"
+    # 背景标题块
+    block = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Pt(48), Pt(110), Pt(620), Pt(120))
+    block.fill.solid()
+    block.fill.fore_color.rgb = palette["primary"]
+    block.line.fill.background()
 
-    slide.placeholders[1].text = subtitle
+    # 标题
+    title_box = slide.shapes.add_textbox(Pt(70), Pt(135), Pt(580), Pt(50))
+    tf = title_box.text_frame
+    tf.clear()
+    p = tf.paragraphs[0]
+    p.text = title
+    p.font.size = Pt(28)
+    p.font.bold = True
+    p.font.name = "Microsoft YaHei"
+    p.font.color.rgb = RGBColor(255, 255, 255)
 
-    title_para = slide.shapes.title.text_frame.paragraphs[0]
-    title_para.font.size = Pt(30)
-    title_para.font.bold = True
+    # 副标题
+    subtitle = choose_subtitle_by_style(style)
+    sub_box = slide.shapes.add_textbox(Pt(70), Pt(185), Pt(580), Pt(30))
+    tf2 = sub_box.text_frame
+    tf2.clear()
+    p2 = tf2.paragraphs[0]
+    p2.text = f"{subtitle}｜主题：{palette['name']}"
+    p2.font.size = Pt(14)
+    p2.font.name = "Microsoft YaHei"
+    p2.font.color.rgb = RGBColor(255, 255, 255)
 
-    sub_para = slide.placeholders[1].text_frame.paragraphs[0]
-    sub_para.font.size = Pt(16)
-
-    # ========= 内容页 =========
+    # 内容页
     if not slides_data:
         slides_data = [{"title": "内容", "bullets": ["（空内容）"]}]
 
     for item in slides_data:
-        slide = prs.slides.add_slide(prs.slide_layouts[5])
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
 
-        title_box = slide.shapes.add_textbox(Pt(36), Pt(24), Pt(620), Pt(40))
-        tf_title = title_box.text_frame
-        tf_title.clear()
-        p_title = tf_title.paragraphs[0]
-        p_title.text = item.get("title", "内容")
-        p_title.font.size = Pt(24)
-        p_title.font.bold = True
-        p_title.font.name = "微软雅黑"
+        create_slide_header(slide, item.get("title", "内容"), palette)
 
-        sub_box = slide.shapes.add_textbox(Pt(36), Pt(60), Pt(620), Pt(24))
-        tf_sub = sub_box.text_frame
-        tf_sub.clear()
-        p_sub = tf_sub.paragraphs[0]
-        p_sub.text = "核心要点"
-        p_sub.font.size = Pt(10)
-
-        content_box = slide.shapes.add_textbox(Pt(50), Pt(110), Pt(620), Pt(320))
+        content_box = slide.shapes.add_textbox(Pt(52), Pt(110), Pt(610), Pt(330))
         tf = content_box.text_frame
         tf.word_wrap = True
         tf.clear()
@@ -564,15 +701,28 @@ def create_pptx_structured(output_path: str, title: str, slides_data, style: str
             p.text = bullet
             p.level = 0
             p.font.size = Pt(20 if style == "汇报" else 18)
-            p.font.name = "微软雅黑"
+            p.font.name = "Microsoft YaHei"
+            p.font.color.rgb = palette["text"]
+            p.space_after = Pt(10)
+
+        # 页脚
+        footer = slide.shapes.add_textbox(Pt(52), Pt(470), Pt(300), Pt(20))
+        tf_footer = footer.text_frame
+        p_footer = tf_footer.paragraphs[0]
+        p_footer.text = f"{subtitle}"
+        p_footer.font.size = Pt(9)
+        p_footer.font.name = "Microsoft YaHei"
+        p_footer.font.color.rgb = palette["subtext"]
 
     prs.save(output_path)
 
 
-def create_pptx(text: str, output_path: str, style: str = None):
-    title, bullets = parse_ppt_content(text)
+def create_pptx(text: str, output_path: str, style: str = None, theme: str = None):
+    title = build_title(text)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    bullets = lines[1:] if len(lines) > 1 else ["（空内容）"]
     slides_data = [{"title": title, "bullets": bullets[:4]}]
-    create_pptx_structured(output_path, title, slides_data, style)
+    create_pptx_structured(output_path, title, slides_data, style, theme)
 
 
 # ========= 路由 =========
@@ -598,6 +748,7 @@ def webhook():
     chat = message.get("chat", {})
     chat_id = chat.get("id")
     text = message.get("text", "")
+    reply_to_message = message.get("reply_to_message", {})
 
     if not chat_id:
         return jsonify({"ok": True})
@@ -605,26 +756,40 @@ def webhook():
     if text == "/start":
         send_message(
             chat_id,
-            "你好，直接发送内容即可。我会自动识别并生成 PDF / Word / Excel / PPT 真文件。支持“文件名：xxx”和“风格：商务/正式/汇报”。"
+            "你好，直接发送内容即可。我会自动识别并生成 PDF / Word / Excel / PPT 真文件。支持“文件名：xxx”“风格：商务/正式/汇报”“主题：商务蓝/深色商务/极简白”。"
         )
         return jsonify({"ok": True})
 
-    if text.startswith("/"):
+    if text.startswith("/") and text != "/start":
         send_message(chat_id, "请直接发送正文内容，不需要输入命令。")
         return jsonify({"ok": True})
 
-    custom_name, text_without_filename = extract_custom_filename(text)
+    merged_text = extract_effective_request(text, reply_to_message)
+
+    custom_name, text_without_filename = extract_custom_filename(merged_text)
     style, text_without_style = extract_style(text_without_filename)
-    cleaned = strip_leading_type_command(text_without_style)
+    theme, text_without_theme = extract_theme(text_without_style)
+    cleaned = strip_control_phrases(text_without_theme)
 
     if not cleaned:
         send_message(chat_id, "请发送你要生成成文件的文字内容。")
         return jsonify({"ok": True})
 
+    lowered = cleaned.lower()
+    forced_type = None
+    if "pdf" in lowered:
+        forced_type = "pdf"
+    elif "docx" in lowered or "word" in lowered:
+        forced_type = "docx"
+    elif "xlsx" in lowered or "excel" in lowered:
+        forced_type = "xlsx"
+    elif "pptx" in lowered or re.search(r"\bppt\b", lowered):
+        forced_type = "pptx"
+
     ai_result = ai_analyze(cleaned, style)
 
     if ai_result:
-        file_type = ai_result.get("file_type", "pdf")
+        file_type = forced_type or ai_result.get("file_type", "pdf")
         ai_title = ai_result.get("title", build_title(cleaned))
         ai_style = ai_result.get("style", style or "默认")
         content_text = ai_result.get("content_text", cleaned)
@@ -633,7 +798,7 @@ def webhook():
         slides = ai_result.get("slides", [])
     else:
         route = detect_intent_and_file_type_fallback(cleaned)
-        file_type = route["file_type"]
+        file_type = forced_type or route["file_type"]
         intent = route["intent"]
         ai_title = build_title(cleaned)
         ai_style = style or "默认"
@@ -642,38 +807,41 @@ def webhook():
         table_rows = []
         slides = []
 
+    if not content_text or not normalize_text(content_text):
+        content_text = cleaned
+
     send_message(chat_id, f"已收到，正在为你生成 {file_type} 文件...")
 
     try:
         if file_type == "pdf":
             file_path = build_output_filename(content_text, "pdf", custom_name, ai_title)
-            create_pdf(content_text, file_path, ai_style)
+            create_pdf(content_text, file_path, ai_style, theme)
             send_document(chat_id, file_path, "你的 PDF 已生成")
 
         elif file_type == "docx":
             file_path = build_output_filename(content_text, "docx", custom_name, ai_title)
-            create_docx(content_text, file_path, ai_style)
+            create_docx(content_text, file_path, ai_style, theme)
             send_document(chat_id, file_path, "你的 Word 文档已生成")
 
         elif file_type == "xlsx":
             file_path = build_output_filename(content_text, "xlsx", custom_name, ai_title)
             if table_headers or table_rows:
-                create_xlsx_structured(file_path, table_headers, table_rows, ai_style)
+                create_xlsx_structured(file_path, table_headers, table_rows, ai_style, theme)
             else:
-                create_xlsx(content_text, file_path, ai_style)
+                create_xlsx(content_text, file_path, ai_style, theme)
             send_document(chat_id, file_path, "你的 Excel 文件已生成")
 
         elif file_type == "pptx":
             file_path = build_output_filename(content_text, "pptx", custom_name, ai_title)
             if slides:
-                create_pptx_structured(file_path, ai_title, slides, ai_style)
+                create_pptx_structured(file_path, ai_title, slides, ai_style, theme)
             else:
-                create_pptx(content_text, file_path, ai_style)
+                create_pptx(content_text, file_path, ai_style, theme)
             send_document(chat_id, file_path, "你的 PPT 文件已生成")
 
         else:
             file_path = build_output_filename(content_text, "pdf", custom_name, ai_title)
-            create_pdf(content_text, file_path, ai_style)
+            create_pdf(content_text, file_path, ai_style, theme)
             send_document(chat_id, file_path, "你的 PDF 已生成")
 
     except Exception as e:
